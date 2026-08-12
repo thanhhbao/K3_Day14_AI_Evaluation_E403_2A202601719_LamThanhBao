@@ -36,75 +36,28 @@ from typing import Any, Callable
 
 @dataclass
 class QAPair:
-    """
-    A question-answer pair for evaluation (part of the Golden Dataset).
+    question: str
+    expected_answer: str
+    context: str = ""
+    metadata: dict = field(default_factory=dict)
+    retrieved_contexts: list = field(default_factory=list)
 
-    From lecture: Golden dataset cần có:
-        - question: câu hỏi user
-        - ground_truth (expected_answer): expert-written expected answer
-        - context: source documents cần retrieve
-        - metadata: difficulty (easy/medium/hard), category, source_docs
-
-    Fields:
-        question:        The question to answer.
-        expected_answer: The reference/ground-truth answer (expert-written).
-        context:            Source context (may be empty string if not applicable).
-        metadata:           Optional metadata dict (difficulty, category, etc.).
-        retrieved_contexts: List of retrieved chunks (ORDER = retriever rank).
-                            Used by the retrieval-side metrics (Task 2b).
-    """
-    # TODO: define fields
-    # Hints:
-    #   context: str = ""
-    #   metadata: dict = field(default_factory=dict)
-    #   retrieved_contexts: list = field(default_factory=list)
-    pass
 
 
 @dataclass
 class EvalResult:
-    """
-    Evaluation result for a single Q&A pair.
-
-    From lecture - RAG metrics pipeline:
-        Question → Retriever → Context → Generator → Answer
-        Each step has a metric: Context Recall, Context Precision, Faithfulness, Answer Relevancy
-
-    From lecture - Score interpretation:
-        0.8-1.0: Good (Monitor, maintain)
-        0.6-0.8: Needs work (Analyze failures, iterate)
-        < 0.6: Significant issues (Deep investigation required)
-
-    Fields:
-        qa_pair:        The original QAPair.
-        actual_answer:  What the agent actually returned.
-        faithfulness:   Float 0-1, how grounded the answer is in context.
-        relevance:      Float 0-1, how relevant the answer is to the question.
-        completeness:   Float 0-1, how complete the answer is vs expected.
-        passed:         True if all three scores >= 0.5.
-        failure_type:   None if passed, otherwise one of:
-                        "hallucination", "irrelevant", "incomplete", "off_topic".
-        context_precision: Float 0-1 or None — quality of retrieval ranking.
-        context_recall:    Float 0-1 or None — coverage of expected by context.
-                        (Both stay None unless retrieved chunks are supplied;
-                         they are NOT part of overall_score().)
-    """
-    # TODO: define fields
-    # Hints:
-    #   failure_type: str | None = None
-    #   context_precision: float | None = None
-    #   context_recall: float | None = None
-    pass
+    qa_pair: QAPair
+    actual_answer: str
+    faithfulness: float
+    relevance: float
+    completeness: float
+    passed: bool
+    failure_type: str | None = None
+    context_precision: float | None = None
+    context_recall: float | None = None
 
     def overall_score(self) -> float:
-        """Compute the average of faithfulness, relevance, and completeness.
-
-        Returns:
-            (faithfulness + relevance + completeness) / 3.0
-
-        TODO: Return mean of the three metric scores
-        """
-        raise NotImplementedError
+        return (self.faithfulness + self.relevance + self.completeness) / 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +114,12 @@ class RAGASEvaluator:
         Returns:
             float in [0.0, 1.0] — 1.0 = fully grounded in context.
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_faithfulness")
+        answer_tokens = _tokenize(answer)
+        if not answer_tokens:
+            return 1.0
+        context_tokens = _tokenize(context)
+        score = len(answer_tokens & context_tokens) / len(answer_tokens)
+        return min(1.0, max(0.0, score))
 
     def evaluate_relevance(self, answer: str, question: str) -> float:
         """
@@ -175,8 +132,12 @@ class RAGASEvaluator:
         Returns:
             float in [0.0, 1.0]
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_relevance")
+        question_tokens = _tokenize(question)
+        if not question_tokens:
+            return 1.0
+        answer_tokens = _tokenize(answer)
+        score = len(answer_tokens & question_tokens) / len(question_tokens)
+        return min(1.0, max(0.0, score))
 
     def evaluate_completeness(self, answer: str, expected: str) -> float:
         """
@@ -189,8 +150,12 @@ class RAGASEvaluator:
         Returns:
             float in [0.0, 1.0]
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_completeness")
+        expected_tokens = _tokenize(expected)
+        if not expected_tokens:
+            return 1.0
+        answer_tokens = _tokenize(answer)
+        score = len(answer_tokens & expected_tokens) / len(expected_tokens)
+        return min(1.0, max(0.0, score))
 
     # -----------------------------------------------------------------------
     # Task 2b — Retrieval-side metrics (evaluate the GET-CONTEXT step)
@@ -211,8 +176,14 @@ class RAGASEvaluator:
 
         Low recall => retriever missed evidence the answer needs.
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_context_recall")
+        expected_tokens = _tokenize(expected)
+        if not expected_tokens:
+            return 1.0
+        union_tokens: set[str] = set()
+        for chunk in contexts:
+            union_tokens |= _tokenize(chunk)
+        score = len(expected_tokens & union_tokens) / len(expected_tokens)
+        return min(1.0, max(0.0, score))
 
     def evaluate_context_precision(
         self,
@@ -232,8 +203,25 @@ class RAGASEvaluator:
         Return 1.0 if expected empty; 0.0 if no chunks or none relevant.
         Reordering relevant chunks earlier (reranking) raises this score.
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_context_precision")
+        if not _tokenize(expected):
+            return 1.0
+        if not contexts:
+            return 0.0
+        expected_tokens = _tokenize(expected)
+        relevances = []
+        for chunk in contexts:
+            chunk_tokens = _tokenize(chunk)
+            overlap = len(chunk_tokens & expected_tokens) / len(expected_tokens)
+            relevances.append(overlap >= relevance_threshold)
+        total_relevant = sum(relevances)
+        if total_relevant == 0:
+            return 0.0
+        ap, hits = 0.0, 0
+        for k, is_rel in enumerate(relevances, 1):
+            if is_rel:
+                hits += 1
+                ap += hits / k
+        return min(1.0, max(0.0, ap / total_relevant))
 
     def run_full_eval(
         self,
@@ -265,8 +253,40 @@ class RAGASEvaluator:
         Returns:
             EvalResult with all fields populated.
         """
-        # TODO
-        raise NotImplementedError("Implement run_full_eval")
+        faithfulness = self.evaluate_faithfulness(answer, context)
+        relevance = self.evaluate_relevance(answer, question)
+        completeness = self.evaluate_completeness(answer, expected)
+
+        passed = faithfulness >= 0.5 and relevance >= 0.5 and completeness >= 0.5
+
+        if passed:
+            failure_type = None
+        elif faithfulness < 0.3:
+            failure_type = "hallucination"
+        elif relevance < 0.3:
+            failure_type = "irrelevant"
+        elif completeness < 0.3:
+            failure_type = "incomplete"
+        else:
+            failure_type = "off_topic"
+
+        context_recall = None
+        context_precision = None
+        if contexts is not None:
+            context_recall = self.evaluate_context_recall(contexts, expected)
+            context_precision = self.evaluate_context_precision(contexts, expected)
+
+        return EvalResult(
+            qa_pair=QAPair(question=question, expected_answer=expected, context=context),
+            actual_answer=answer,
+            faithfulness=faithfulness,
+            relevance=relevance,
+            completeness=completeness,
+            passed=passed,
+            failure_type=failure_type,
+            context_recall=context_recall,
+            context_precision=context_precision,
+        )
 
 
 # ---------------------------------------------------------------------------
