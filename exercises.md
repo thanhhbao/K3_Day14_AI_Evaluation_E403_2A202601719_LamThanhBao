@@ -30,11 +30,11 @@ critical.
 
 | Metric | Acceptable Low Score Scenario | Critical Low Score Scenario | Action Required |
 |---|---|---|---|
-| Faithfulness | | | |
-| Answer Relevance | | | |
-| Context Recall | | | |
-| Context Precision | | | |
-| Completeness | | | |
+| Faithfulness | Câu hỏi chung chung, context rộng, khó map từng từ chính xác (e.g., tóm tắt chính sách). Score 0.6–0.7 có thể chấp nhận khi answer đúng nhưng dùng paraphrase. | Dưới 0.5: answer chứa claim không có trong context → hallucination. Đặc biệt nguy hiểm với domain có số liệu (học phí, deadline). | Kiểm tra retrieval context có đủ không; thêm grounding guardrail; review các claim bịa. |
+| Answer Relevance | Câu hỏi mơ hồ hoặc có nhiều cách hiển. Answer có thể giải thích thêm background, làm giảm overlap từ với question. Score 0.6 chấp nhận được. | Dưới 0.4: answer hoàn toàn lạc đề, không giải quyết intent của user. | Rà lại prompt instruction; thêm few-shot examples về cách trả lời đúng intent; kiểm tra routing. |
+| Context Recall | Câu hỏi rộng cần nhiều document, retriever chỉ lấy được một phần. Score 0.6 chấp nhận được nếu phần lấy được đủ để generate câu trả lời chính. | Dưới 0.4: retriever bỏ sót evidence then chốt khiến generation thiếu thông tin quan trọng. | Tăng top-k, mở rộng chunking strategy, thêm query expansion hoặc hybrid search. |
+| Context Precision | Corpus nhỏ hoặc câu hỏi rất cụ thể, noise chunk không làm lệch generation. Score thấp ít tác hại nếu recall cao. | Dưới 0.3: noise chunk đứng đầu ranking liên tục, generation bị dẫn dắt sai hướng. | Thêm reranker; điều chỉnh similarity threshold; lọc chunk theo metadata (source_doc). |
+| Completeness | Câu hỏi phức tạp, chấp nhận partial answer; user có thể follow-up. Score 0.6 hợp lý. | Dưới 0.4: bỏ sót điều kiện quan trọng (deadline, mức phí, ngoại lệ) làm user hiểu sai chính sách. | Tăng context window; review expected_answer coverage; thêm instruction "list all conditions". |
 
 ### Exercise 1.2 — Bias trong LLM-as-a-Judge
 
@@ -46,15 +46,15 @@ Ba bias thường gặp:
 
 **Câu 1: Thiết kế experiment phát hiện position bias với ít nhất hai conditions.**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Chọn 10 câu hỏi, mỗi câu có 2 candidate answers (A và B) với chất lượng khác nhau. Condition 1: trình bày [A trước, B sau] cho judge. Condition 2: đảo thứ tự [B trước, A sau] cho cùng judge. Nếu judge chọn answer đứng trước nhiều hơn đáng kể so với expected (dựa trên human label), thì tồn tại position bias. Để có ý nghĩa thống kê, cần ít nhất 20 cặp và so sánh tỷ lệ "chọn answer đứng trước" giữa hai condition.
 
 **Câu 2: Làm thế nào giảm verbosity bias bằng rubric design?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Rubric cần có tiêu chí explicit về conciseness và penalize thông tin thừa. Ví dụ: thêm dimension "Precision" với mô tả "Điểm bị trừ nếu answer chứa thông tin không liên quan hoặc lặp lại không cần thiết." Tránh dùng rubric mơ hồ như "comprehensive = tốt". Đặt word-limit gợi ý trong prompt judge để chuẩn hoá kỳ vọng độ dài. Nếu có thể, cung cấp example answer ngắn gọn nhưng đầy đủ như golden reference.
 
 **Câu 3: Tại sao cần calibrate LLM judge với human labels?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* LLM judge có thể có systematic bias riêng (verbosity, self-preference, cultural) không phản ánh chuẩn con người. Calibration so sánh score của LLM judge với human annotation trên cùng tập dữ liệu để đo inter-rater agreement (Cohen's kappa hoặc Pearson correlation). Nếu agreement thấp, ta biết judge đang đo sai thứ cần đo. Calibration cũng giúp điều chỉnh threshold — ví dụ nếu LLM judge luôn cho điểm cao hơn human 0.1, ta hạ threshold tương ứng. Không calibrate → metric trông đẹp nhưng không reflect chất lượng thực.
 
 ### Exercise 1.3 — Evaluation trong CI/CD
 
@@ -62,13 +62,13 @@ Ba bias thường gặp:
 
 | Metric | Threshold | Lý do |
 |---|---:|---|
-| Faithfulness | | |
-| Answer Relevance | | |
-| Completeness | | |
+| Faithfulness | 0.70 | Dưới ngưỡng này risk hallucination cao; trong domain student services, thông tin sai về học phí/deadline có thể gây hậu quả nghiêm trọng cho student. |
+| Answer Relevance | 0.60 | Dưới ngưỡng này answer thường không giải quyết được intent; student sẽ không tìm được thông tin cần, mất trust vào hệ thống. |
+| Completeness | 0.65 | Dưới ngưỡng này answer bỏ sót điều kiện/ngoại lệ quan trọng; student có thể hiểu thiếu chính sách và bị ảnh hưởng tài chính hoặc học thuật. |
 
 **Câu 2: Khi nào dùng offline evaluation, online evaluation và human review?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* **Offline evaluation** dùng trước mỗi code release hoặc prompt change — chạy toàn bộ golden dataset để đảm bảo không có regression trước khi deploy. **Online evaluation** chạy continuous trên real traffic để phát hiện distribution shift hoặc edge case mới mà golden dataset chưa cover; dùng sampling để không làm tăng latency đáng kể. **Human review** dùng khi cần calibrate LLM judge (quarterly), khi có high-stakes edge case (học viên khiếu nại, chính sách thay đổi lớn), hoặc khi offline và online metrics bất đồng và cần phán quyết cuối cùng. Ba loại bổ sung nhau — offline nhanh và rẻ, online real-time nhưng noisy, human chậm nhưng authoritative.
 
 ---
 
