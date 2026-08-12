@@ -329,8 +329,7 @@ class LLMJudge:
     """
 
     def __init__(self, judge_llm_fn: Callable[[str], str]) -> None:
-        # TODO: store judge_llm_fn
-        pass
+        self.judge_llm_fn = judge_llm_fn
 
     def score_response(
         self,
@@ -362,8 +361,20 @@ class LLMJudge:
                 "reasoning": str,               # raw LLM explanation
             }
         """
-        # TODO
-        raise NotImplementedError("Implement score_response")
+        import json
+        rubric_text = "\n".join(f"- {k}: {v}" for k, v in rubric.items())
+        prompt = (
+            f"Question: {question}\nAnswer: {answer}\n"
+            f"Rubric:\n{rubric_text}\n"
+            "Return a JSON object with each criterion as a key and a float score 0-1 as the value."
+        )
+        response = self.judge_llm_fn(prompt)
+        try:
+            parsed = json.loads(response)
+            scores = {k: float(v) for k, v in parsed.items() if k in rubric}
+        except Exception:
+            scores = {k: 0.5 for k in rubric}
+        return {"scores": scores, "reasoning": response}
 
     def detect_bias(self, scores_batch: list[dict[str, Any]]) -> dict[str, Any]:
         """
@@ -384,8 +395,23 @@ class LLMJudge:
                 "severity_bias":   bool,
             }
         """
-        # TODO
-        raise NotImplementedError("Implement detect_bias")
+        if not scores_batch:
+            return {"positional_bias": False, "leniency_bias": False, "severity_bias": False}
+        all_scores = [v for item in scores_batch for v in item.get("scores", {}).values()]
+        avg = sum(all_scores) / len(all_scores) if all_scores else 0.0
+        avgs_per_item = [
+            sum(item["scores"].values()) / len(item["scores"])
+            for item in scores_batch if item.get("scores")
+        ]
+        positional_bias = (
+            len(avgs_per_item) > 1
+            and avgs_per_item[0] > sum(avgs_per_item[1:]) / len(avgs_per_item[1:]) + 0.1
+        )
+        return {
+            "positional_bias": positional_bias,
+            "leniency_bias": avg > 0.8,
+            "severity_bias": avg < 0.3,
+        }
 
 
 # ---------------------------------------------------------------------------
