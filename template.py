@@ -606,8 +606,11 @@ class FailureAnalyzer:
             dict mapping failure_type → count.
             Example: {"hallucination": 3, "irrelevant": 2, "incomplete": 5}
         """
-        # TODO
-        raise NotImplementedError("Implement categorize_failures")
+        categories: dict[str, int] = {}
+        for f in failures:
+            if f.failure_type:
+                categories[f.failure_type] = categories.get(f.failure_type, 0) + 1
+        return categories
 
     def find_root_cause(self, failure: EvalResult) -> str:
         """
@@ -619,8 +622,19 @@ class FailureAnalyzer:
             "Answer is missing key information — increase context window or improve generation"
             "Multiple issues detected — review full pipeline"
         """
-        # TODO: compare faithfulness, relevance, completeness, return appropriate string
-        raise NotImplementedError("Implement find_root_cause")
+        scores = {
+            "faithfulness": failure.faithfulness,
+            "relevance": failure.relevance,
+            "completeness": failure.completeness,
+        }
+        lowest = min(scores, key=scores.get)
+        if lowest == "faithfulness":
+            return "Context is missing or irrelevant — improve retrieval"
+        elif lowest == "relevance":
+            return "Answer does not address the question — improve prompt clarity"
+        elif lowest == "completeness":
+            return "Answer is missing key information — increase context window or improve generation"
+        return "Multiple issues detected — review full pipeline"
 
     def generate_improvement_log(self, failures: list, suggestions: list[str]) -> str:
         """Generate a Markdown table logging failures and improvement actions.
@@ -639,7 +653,16 @@ class FailureAnalyzer:
 
         TODO: Build markdown table with failure details + matched suggestions
         """
-        raise NotImplementedError
+        header = "| Failure ID | Type | Root Cause | Suggested Fix | Status |\n"
+        separator = "|------------|------|------------|---------------|--------|\n"
+        rows = []
+        for i, f in enumerate(failures):
+            fid = f"F{i + 1:03d}"
+            ftype = f.failure_type or "unknown"
+            root_cause = self.find_root_cause(f)
+            fix = suggestions[i] if i < len(suggestions) else "Review full pipeline"
+            rows.append(f"| {fid} | {ftype} | {root_cause} | {fix} | Open |")
+        return header + separator + "\n".join(rows)
 
     def generate_improvement_suggestions(
         self, failures: list[EvalResult]
@@ -657,8 +680,31 @@ class FailureAnalyzer:
         Returns:
             List of at least 3 suggestion strings (or fewer if failures is empty).
         """
-        # TODO: analyze categorized failures and return suggestions
-        raise NotImplementedError("Implement generate_improvement_suggestions")
+        if not failures:
+            return []
+        categories = self.categorize_failures(failures)
+        suggestions = []
+        type_map = {
+            "hallucination": "Implement hallucination checker to filter unsupported claims",
+            "incomplete": "Increase chunk size in RAG pipeline to reduce context fragmentation",
+            "irrelevant": "Add few-shot examples showing direct answers to improve relevance",
+            "off_topic": "Review intent detection and routing logic",
+            "refusal": "Review and relax guardrails for legitimate student service questions",
+        }
+        for ftype, suggestion in type_map.items():
+            if categories.get(ftype, 0) > 0:
+                suggestions.append(suggestion)
+        extras = [
+            "Add few-shot examples showing complete answers to improve completeness",
+            "Review retrieval strategy to improve context coverage",
+            "Implement end-to-end regression tests with golden dataset after each change",
+        ]
+        for s in extras:
+            if len(suggestions) >= 3:
+                break
+            if s not in suggestions:
+                suggestions.append(s)
+        return suggestions
 
 
 # ---------------------------------------------------------------------------
